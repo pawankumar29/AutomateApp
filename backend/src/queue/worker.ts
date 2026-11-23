@@ -93,6 +93,29 @@ export const discoveryWorker = new Worker(
       for (const item of normalizedJobs) {
         if (!item.companyId) continue;
 
+        // Strict 1-Hour Age Cutoff: ONLY jobs posted within the last 60 minutes
+        const rawDateLower = (item.postingDateRaw || '').toLowerCase();
+        if (
+          !rawDateLower ||
+          rawDateLower.includes('few hours') ||
+          rawDateLower.includes('today') ||
+          rawDateLower.includes('day') ||
+          rawDateLower.includes('yesterday') ||
+          rawDateLower.includes('week') ||
+          rawDateLower.includes('month') ||
+          rawDateLower.includes('year')
+        ) {
+          console.log(`[Worker:Discovery] Skipping '${item.title}' - not explicitly verified within 1 hour ('${item.postingDateRaw}').`);
+          continue;
+        }
+        if (item.postedAt) {
+          const ageMinutes = (Date.now() - new Date(item.postedAt).getTime()) / (60 * 1000);
+          if (ageMinutes > 60) {
+            console.log(`[Worker:Discovery] Skipping '${item.title}' - posted ${Math.round(ageMinutes)} mins ago (> 1 hour limit).`);
+            continue;
+          }
+        }
+
         // Rule B: Only ONE application per company across all platforms!
         if (companyHandledInCycle.has(item.companyId)) {
           console.log(`[Worker:Discovery] Skipping job '${item.title}' - company already processed in current cycle.`);

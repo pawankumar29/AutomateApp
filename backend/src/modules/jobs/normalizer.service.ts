@@ -24,7 +24,8 @@ export class JobNormalizerService {
    * Supports: "Just posted", "10 minutes ago", "2 hours ago", "1 day ago", "3 days ago", "Posted 2d ago", etc.
    */
   parsePostingDate(dateStr?: string | null): Date {
-    if (!dateStr || typeof dateStr !== 'string') return new Date();
+    const pastFallback = new Date(Date.now() - 7 * 24 * 3600 * 1000); // 7 days ago if unknown
+    if (!dateStr || typeof dateStr !== 'string') return pastFallback;
     const str = dateStr.toLowerCase().trim();
     const now = new Date();
 
@@ -33,7 +34,8 @@ export class JobNormalizerService {
     }
 
     if (str.includes('today')) {
-      return now;
+      // "Today" can be 12-20 hours old, NOT guaranteed within 1 hour!
+      return new Date(now.getTime() - 12 * 3600 * 1000);
     }
 
     if (str.includes('yesterday')) {
