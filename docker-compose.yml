@@ -1,0 +1,149 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: job_saas_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${DB_USER:-postgres}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-postgres}
+      POSTGRES_DB: ${DB_NAME:-job_apply_saas}
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-postgres} -d ${DB_NAME:-job_apply_saas}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - saas_net
+
+  redis:
+    image: redis:7-alpine
+    container_name: job_saas_redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    ports:
+      - "6379:6379"
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - saas_net
+
+  automation-service:
+    image: job-applier-automation:latest
+    build:
+      context: .
+      dockerfile: automation-service/Dockerfile
+    container_name: job_saas_automation
+    restart: unless-stopped
+    environment:
+      - PORT=8000
+      - PLAYWRIGHT_HEADLESS=true
+      - PYTHONUNBUFFERED=1
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./profile:/app/profile
+      - ./uploads:/app/uploads
+      - ./bots:/app/bots
+      - ./core:/app/core
+      - ./automation-service:/app/automation-service
+    networks:
+      - saas_net
+
+  backend:
+    image: job-applier-backend:latest
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: job_saas_backend
+    restart: unless-stopped
+    environment:
+      - PORT=5000
+      - NODE_ENV=production
+      - DATABASE_URL=postgresql://${DB_USER:-postgres}:${DB_PASSWORD:-postgres}@postgres:5432/${DB_NAME:-job_apply_saas}
+      - REDIS_URL=redis://redis:6379
+      - JWT_SECRET=${JWT_SECRET:-saas_jwt_secret_key_production_grade_super_secure_32_chars!}
+      - JWT_EXPIRES_IN=7d
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY:-0123456789abcdef0123456789abcdef}
+      - AUTOMATION_SERVICE_URL=http://automation-service:8000
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - UPLOAD_DIR=/app/uploads
+      - FRONTEND_URL=${FRONTEND_URL:-http://localhost:3000}
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./uploads:/app/uploads
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      automation-service:
+        condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:5000/api/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - saas_net
+
+  worker:
+    image: job-applier-worker:latest
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.worker
+    container_name: job_saas_worker
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=production
+      - DATABASE_URL=postgresql://${DB_USER:-postgres}:${DB_PASSWORD:-postgres}@postgres:5432/${DB_NAME:-job_apply_saas}
+      - REDIS_URL=redis://redis:6379
+      - AUTOMATION_SERVICE_URL=http://automation-service:8000
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY:-0123456789abcdef0123456789abcdef}
+      - UPLOAD_DIR=/app/uploads
+    volumes:
+      - ./uploads:/app/uploads
+    depends_on:
+      backend:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    networks:
+      - saas_net
+
+  frontend:
+    image: job-applier-frontend:latest
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: job_saas_frontend
+    restart: unless-stopped
+    ports:
+      - "3000:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - saas_net
+
+networks:
+  saas_net:
+    driver: bridge
+
+volumes:
+  pgdata:
+  redisdata:
+  browser_profiles:

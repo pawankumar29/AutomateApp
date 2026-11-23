@@ -1,0 +1,15 @@
+node_modules
+dist
+build
+.git
+.github
+*.log
+logs
+profile
+uploads
+coverage
+.env.local
+.DS_Store
+__pycache__
+*.pyc
+*.pyo

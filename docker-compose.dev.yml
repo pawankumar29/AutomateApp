@@ -1,0 +1,97 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: job_saas_postgres_dev
+    environment:
+      POSTGRES_USER: ${DB_USER:-postgres}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-postgres}
+      POSTGRES_DB: ${DB_NAME:-job_apply_saas}
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata_dev:/var/lib/postgresql/data
+    networks:
+      - saas_net_dev
+
+  redis:
+    image: redis:7-alpine
+    container_name: job_saas_redis_dev
+    ports:
+      - "6379:6379"
+    volumes:
+      - redisdata_dev:/data
+    networks:
+      - saas_net_dev
+
+  automation-service:
+    build:
+      context: .
+      dockerfile: automation-service/Dockerfile
+    container_name: job_saas_automation_dev
+    environment:
+      - PORT=8000
+      - PLAYWRIGHT_HEADLESS=false
+      - PYTHONUNBUFFERED=1
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./automation-service:/app/automation-service
+      - ./bots:/app/bots
+      - ./core:/app/core
+      - ./profile:/app/profile
+      - ./uploads:/app/uploads
+    networks:
+      - saas_net_dev
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.dev
+    container_name: job_saas_backend_dev
+    environment:
+      - PORT=5000
+      - NODE_ENV=development
+      - DATABASE_URL=postgresql://${DB_USER:-postgres}:${DB_PASSWORD:-postgres}@postgres:5432/${DB_NAME:-job_apply_saas}
+      - REDIS_URL=redis://redis:6379
+      - JWT_SECRET=dev_jwt_secret_key_12345678901234567890
+      - JWT_EXPIRES_IN=7d
+      - ENCRYPTION_KEY=0123456789abcdef0123456789abcdef
+      - AUTOMATION_SERVICE_URL=http://automation-service:8000
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - UPLOAD_DIR=/app/uploads
+      - FRONTEND_URL=http://localhost:5173
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./backend:/app
+      - /app/node_modules
+      - ./uploads:/app/uploads
+    depends_on:
+      - postgres
+      - redis
+      - automation-service
+    networks:
+      - saas_net_dev
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.dev
+    container_name: job_saas_frontend_dev
+    ports:
+      - "5173:5173"
+    environment:
+      - VITE_API_URL=http://localhost:5000/api
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    networks:
+      - saas_net_dev
+
+networks:
+  saas_net_dev:
+    driver: bridge
+
+volumes:
+  pgdata_dev:
+  redisdata_dev:

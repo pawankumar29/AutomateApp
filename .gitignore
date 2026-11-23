@@ -1,0 +1,16 @@
+config.yaml
+profile/
+logs/
+__pycache__/
+*.pyc
+*.pyo
+.env
+.env.local
+*.egg-info/
+dist/
+build/
+node_modules/
+uploads/
+coverage/
+*.log
+.DS_Store

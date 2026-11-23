@@ -1,0 +1,236 @@
+import asyncio
+import logging
+from playwright.async_api import Page, TimeoutError as PlaywrightTimeout
+from core.base_bot import BaseBot
+from core.qa_engine import QAEngine
+from core.form_filler import UniversalFormFiller
+
+logger = logging.getLogger(__name__)
+
+HOME_URL = "https://www.indeed.com/"
+LOGIN_URL = "https://secure.indeed.com/auth?hl=en_IN&co=IN"
+JOBS_URL  = "https://www.indeed.com/jobs?q={keywords}&l={location}&fromage=7&iafilter=1"
+
+
+class IndeedBot(BaseBot):
+    def __init__(self, config: dict):
+        super().__init__(config, "indeed")
+        self.creds  = config.get("indeed", {})
+        self.search = config["search"]
+        self.qa     = QAEngine(config)
+
+    # ── Auth ──────────────────────────────────────────────────
+
+    async def login(self):
+        await self.wait_for_manual_login(
+            login_url=LOGIN_URL,
+            indicator_selector="a[href*='resume'], .gnav-logged-in, #indeed-ia-header",
+            platform="Indeed",
+        )
+
+    # ── Main run loop ─────────────────────────────────────────
+
+    async def run(self):
+        await self.start()
+        await self.login()
+
+        keywords = self.search.get("keywords", "Software Engineer")
+        location = self.search.get("location", "India")
+        url = JOBS_URL.format(
+            keywords=keywords.replace(" ", "+"),
+            location=location.replace(" ", "+"),
+        )
+        await self.page.goto(url, wait_until="domcontentloaded")
+        await self.sleep(3, 5)
+
+        while self.applied_count < self.max_applications:
+            await self.sleep(2, 3)
+            cards = await self.page.locator(
+                "div.job_seen_beacon, .resultContent, [data-testid='slider_item']"
+            ).all()
+            if not cards:
+                logger.info("[Indeed] No job cards found.")
+                break
+
+            for card in cards:
+                if self.applied_count >= self.max_applications:
+                    break
+                try:
+                    easy_apply = card.locator(
+                        "text=Easily apply, text=Easy Apply"
+                    )
+                    if not await easy_apply.count():
+                        continue
+                    title = card.locator("h2 a, .jobTitle a").first
+                    await title.click()
+                    await self.sleep(2, 4)
+                    await self._apply()
+                except Exception as e:
+                    logger.warning(f"[Indeed] Skipping card: {e}")
+
+            if not await self._next_page():
+                break
+
+        await self.stop()
+
+    # ── Apply flow ────────────────────────────────────────────
+
+    async def _apply(self):
+        # Look for both Indeed Easy Apply and External Company Site Apply buttons
+        apply_selectors = [
+            "button:has-text('Apply now')",
+            "a:has-text('Apply on company site')",
+            "a:has-text('Apply on company')",
+            "a:has-text('Apply now')",
+            "button:has-text('Apply on')",
+            "a[href*='applystart']",
+            "#indeedApplyButton",
+            "[data-testid='indeedApplyButton']",
+            "button[aria-label*='Apply']",
+            "a[aria-label*='Apply']",
+        ]
+        
+        apply_btn = None
+        for sel in apply_selectors:
+            try:
+                candidate = self.page.locator(sel).first
+                if await candidate.count() and await candidate.is_visible():
+                    apply_btn = candidate
+                    logger.info(f"[Indeed] Found apply button with selector: {sel}")
+                    break
+            except Exception:
+                continue
+
+        if not apply_btn:
+            logger.info("[Indeed] No apply button detected.")
+            return
+
+        target_page = self.page
+        try:
+            # Handle new tab or redirect
+            async with self.context.expect_page(timeout=7000) as new_page_info:
+                await apply_btn.click()
+            target_page = await new_page_info.value
+            await target_page.wait_for_load_state("domcontentloaded", timeout=15000)
+            logger.info(f"[Indeed] Switched to application tab: {target_page.url}")
+        except Exception:
+            # Inline form or same-tab redirect
+            await asyncio.sleep(2)
+
+        # Run Universal Form Filler with resume and affirmative questionnaire logic
+        filler = UniversalFormFiller(target_page, self.config)
+        success = await filler.fill_and_submit(max_steps=10)
+        if success or filler.applied:
+            self.applied_count += 1
+            logger.info(f"[Indeed] Application successfully completed! Total: {self.applied_count}")
+
+    async def _fill_form(self, page: Page):
+        resume = self.config["personal"].get("resume_path", "")
+        max_steps = 10
+
+        for _ in range(max_steps):
+            await asyncio.sleep(1.5)
+
+            # Resume upload
+            if resume:
+                upload = page.locator("input[type='file']").first
+                if await upload.count():
+                    try:
+                        await upload.set_input_files(resume)
+                        await asyncio.sleep(1)
+                    except Exception:
+                        pass
+
+            # Text / number / textarea
+            for inp in await page.locator(
+                "input[type='text'], input[type='number'], textarea"
+            ).all():
+                try:
+                    if await inp.input_value():
+                        continue
+                    label = await self._get_label(page, inp)
+                    answer = self.qa.answer(label)
+                    if answer:
+                        await inp.fill("")
+                        await inp.type(answer, delay=50)
+                except Exception:
+                    pass
+
+            # Selects
+            for sel in await page.locator("select").all():
+                try:
+                    label  = await self._get_label(page, sel)
+                    answer = self.qa.answer(label)
+                    opts   = await sel.locator("option").all_inner_texts()
+                    match  = next((o for o in opts if answer.lower() in o.lower()), None)
+                    if match:
+                        await sel.select_option(label=match)
+                except Exception:
+                    pass
+
+            # Radios
+            for radio in await page.locator("input[type='radio']").all():
+                try:
+                    if await radio.is_checked():
+                        continue
+                    rid = await radio.get_attribute("id")
+                    label_el = page.locator(f"label[for='{rid}']")
+                    label_text = await label_el.inner_text()
+                    fieldset = radio.locator("xpath=ancestor::fieldset").first
+                    q_text = await fieldset.locator("legend").inner_text()
+                    answer = self.qa.answer(q_text)
+                    if answer.lower() in label_text.lower():
+                        await radio.click()
+                except Exception:
+                    pass
+
+            # Submit
+            submit = page.locator(
+                "button:has-text('Submit your application'), "
+                "button:has-text('Submit application')"
+            ).first
+            if await submit.count():
+                await submit.click()
+                await asyncio.sleep(2)
+                self.applied_count += 1
+                logger.info(f"[Indeed] Applied! Total: {self.applied_count}")
+                return
+
+            # Next / Continue
+            continued = False
+            for label in ["Continue", "Next", "Review your application"]:
+                btn = page.locator(f"button:has-text('{label}')").first
+                if await btn.count():
+                    await btn.click()
+                    await asyncio.sleep(1.5)
+                    continued = True
+                    break
+            if not continued:
+                logger.warning("[Indeed] Could not progress form — skipping.")
+                return
+
+    async def _get_label(self, page: Page, element) -> str:
+        try:
+            el_id = await element.get_attribute("id")
+            if el_id:
+                label = page.locator(f"label[for='{el_id}']")
+                if await label.count():
+                    return (await label.inner_text()).strip()
+        except Exception:
+            pass
+        for attr in ("placeholder", "aria-label", "name"):
+            try:
+                val = await element.get_attribute(attr)
+                if val:
+                    return val.strip()
+            except Exception:
+                pass
+        return ""
+
+    async def _next_page(self) -> bool:
+        btn = self.page.locator("a[data-testid='pagination-page-next']").first
+        if await btn.count():
+            await btn.click()
+            await self.sleep(3, 5)
+            return True
+        return False
