@@ -181,23 +181,12 @@ class NaukriBot(BaseBot):
 
         # Run Universal Form Filler with resume and affirmative questionnaire logic
         filler = UniversalFormFiller(target_page, self.config)
+        self.last_filler = filler
         success = await filler.fill_and_submit(max_steps=10)
         if success or filler.applied:
             self.applied_count += 1
             logger.info(f"[Naukri] Application successfully completed! Total: {self.applied_count}")
-        tabs_after = set(self.context.pages)
-        new_tabs = tabs_after - tabs_before
-        if new_tabs:
-            for tab in new_tabs:
-                url = tab.url
-                if "naukri.com" not in url:
-                    self.skipped_external += 1
-                    logger.info(f"[Naukri] External portal opened ({url[:60]}...) — closing and skipping.")
-                    await tab.close()
-                    return
-
-        # Proceed with Easy Apply modal
-        await self._fill_and_submit()
+            return
 
     async def _fill_and_submit(self):
         for _ in range(8):

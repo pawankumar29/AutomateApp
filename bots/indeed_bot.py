@@ -119,6 +119,7 @@ class IndeedBot(BaseBot):
 
         # Run Universal Form Filler with resume and affirmative questionnaire logic
         filler = UniversalFormFiller(target_page, self.config)
+        self.last_filler = filler
         success = await filler.fill_and_submit(max_steps=10)
         if success or filler.applied:
             self.applied_count += 1

@@ -326,7 +326,12 @@ async def apply_to_job(req: ApplyRequest):
 
             # Attempt application flow (Easy Apply or External Company Portal)
             await bot._apply()
-            if bot.applied_count > 0:
+            filler = getattr(bot, "last_filler", None)
+            if filler and filler.captcha_detected:
+                status = "NEEDS_ATTENTION"
+                error_reason = "Security challenge or reCAPTCHA detected. Manual completion required."
+                evidence = filler.evidence
+            elif bot.applied_count > 0:
                 status = "SUBMITTED"
                 evidence = f"LinkedIn application verified and submitted at {datetime.utcnow().isoformat()}"
             else:
@@ -343,7 +348,12 @@ async def apply_to_job(req: ApplyRequest):
             await asyncio.sleep(3)
 
             await bot._apply()
-            if bot.applied_count > 0:
+            filler = getattr(bot, "last_filler", None)
+            if filler and filler.captcha_detected:
+                status = "NEEDS_ATTENTION"
+                error_reason = "Security challenge or reCAPTCHA detected. Manual completion required."
+                evidence = filler.evidence
+            elif bot.applied_count > 0:
                 status = "SUBMITTED"
                 evidence = f"Naukri application verified and submitted at {datetime.utcnow().isoformat()}"
             else:
@@ -360,7 +370,12 @@ async def apply_to_job(req: ApplyRequest):
             await asyncio.sleep(3)
 
             await bot._apply()
-            if bot.applied_count > 0:
+            filler = getattr(bot, "last_filler", None)
+            if filler and filler.captcha_detected:
+                status = "NEEDS_ATTENTION"
+                error_reason = "Security challenge or reCAPTCHA detected. Manual completion required."
+                evidence = filler.evidence
+            elif bot.applied_count > 0:
                 status = "SUBMITTED"
                 evidence = f"Indeed application verified and submitted at {datetime.utcnow().isoformat()}"
             else:

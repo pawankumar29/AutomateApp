@@ -11,7 +11,7 @@ LOGIN_URL = "https://www.linkedin.com/login"
 FEED_URL  = "https://www.linkedin.com/feed"
 JOBS_URL  = (
     "https://www.linkedin.com/jobs/search/"
-    "?f_LF=f_AL&keywords={keywords}&location={location}"
+    "?keywords={keywords}&location={location}&f_AL=true"
 )
 
 # LinkedIn changes class names often — try multiple selectors
@@ -24,8 +24,11 @@ JOB_CARD_SELECTORS = [
 ]
 
 APPLY_BTN_SELECTORS = [
+    "button:has(svg#inbug-fill-medium)",
+    "button:has-text('التقديم السريع')",
     "button.jobs-apply-button",
     "button[aria-label*='Easy Apply']",
+    "button[aria-label*='التقديم']",
     "button:has-text('Easy Apply')",
     ".jobs-apply-button--top-card",
 ]
@@ -139,6 +142,7 @@ class LinkedInBot(BaseBot):
             await self.sleep(2, 3)
 
             filler = UniversalFormFiller(self.page, self.config)
+            self.last_filler = filler
             success = await filler.fill_and_submit(max_steps=10)
             if success or filler.applied:
                 self.applied_count += 1
@@ -182,6 +186,7 @@ class LinkedInBot(BaseBot):
                 await self.sleep(2, 3)
 
             filler = UniversalFormFiller(target_page, self.config)
+            self.last_filler = filler
             success = await filler.fill_and_submit(max_steps=10)
             if success or filler.applied:
                 self.applied_count += 1

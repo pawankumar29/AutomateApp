@@ -21,10 +21,31 @@ class UniversalFormFiller:
         self.resume_path = self.personal.get("resume_path", "")
         self.applied = False
         self.evidence = None
+        self.captcha_detected = False
+
+    async def _dismiss_cookie_banner(self):
+        """Dismisses common cookie / privacy overlays."""
+        banner_selectors = [
+            "button:has-text('Accept All Cookies')",
+            "button:has-text('Accept all')",
+            "button#onetrust-accept-btn-handler",
+            "button:has-text('I agree')",
+        ]
+        for sel in banner_selectors:
+            try:
+                btn = self.page.locator(sel).first
+                if await btn.count() and await btn.is_visible():
+                    await btn.click()
+                    await asyncio.sleep(1)
+                    break
+            except Exception:
+                pass
 
     async def fill_and_submit(self, max_steps: int = 10) -> bool:
         """Runs the complete auto-fill and submission loop."""
         logger.info(f"[FormFiller] Starting universal auto-fill on: {self.page.url}")
+
+        await self._dismiss_cookie_banner()
 
         # If page has an 'Apply for this job' or 'Apply now' button before the form, click it
         await self._click_apply_trigger()
@@ -32,6 +53,14 @@ class UniversalFormFiller:
         for step in range(1, max_steps + 1):
             await asyncio.sleep(1.5)
             logger.info(f"[FormFiller] Executing step {step}/{max_steps} on: {self.page.url}")
+
+            # 0. Check for CAPTCHA / Security challenge
+            captcha = self.page.locator("div[data-testid='captcha'], #captcha-wrapper, iframe[title*='reCAPTCHA'], div.g-recaptcha, #checkpointCard").first
+            if await captcha.count() and await captcha.is_visible():
+                logger.warning(f"[FormFiller] Security challenge or reCAPTCHA detected on {self.page.url}. Manual completion required.")
+                self.captcha_detected = True
+                self.evidence = f"reCAPTCHA challenge detected on {self.page.url}"
+                return False
 
             # 1. Upload Resume
             await self._upload_resume()
@@ -80,11 +109,9 @@ class UniversalFormFiller:
         triggers = [
             "button:has-text('Apply for this job')",
             "a:has-text('Apply for this job')",
-            "button:has-text('Apply now')",
-            "a:has-text('Apply now')",
             "button:has-text('Apply with Resume')",
             "#apply_button",
-            "a[href*='apply']",
+            "button.apply-button",
         ]
         for sel in triggers:
             try:
@@ -140,6 +167,7 @@ class UniversalFormFiller:
                 first_name = parts[0] if parts else "Pawan"
                 last_name = parts[-1] if len(parts) > 1 else "Kumar"
 
+                inp_type = await inp.get_attribute("type")
                 if any(k in lbl_lower for k in ["first name", "given name", "fname"]):
                     val = first_name
                 elif any(k in lbl_lower for k in ["last name", "family name", "surname", "lname"]):
@@ -153,15 +181,29 @@ class UniversalFormFiller:
                 elif any(k in lbl_lower for k in ["city", "location", "address"]):
                     val = self.personal.get("location", "Gurugram, India")
                 elif any(k in lbl_lower for k in ["linkedin"]):
-                    val = self.personal.get("linkedin_url", "https://www.linkedin.com/in/pawan-kumar")
+                    val = self.personal.get("linkedin_url", "https://www.linkedin.com/in/pawan-kumar-72947a193/")
                 elif any(k in lbl_lower for k in ["github", "portfolio", "website"]):
                     val = self.personal.get("portfolio_url", "https://github.com/")
+                elif any(k in lbl_lower for k in ["current ctc", "current salary", "present ctc"]):
+                    if "in inr" in lbl_lower or "in rs" in lbl_lower or "inr" in lbl_lower or inp_type == "number":
+                        val = "1000000"
+                    else:
+                        val = "10 LPA"
                 elif any(k in lbl_lower for k in ["salary", "ctc", "expected"]):
-                    val = self.personal.get("expected_salary", "13 LPA")
+                    if "in inr" in lbl_lower or "in rs" in lbl_lower or "inr" in lbl_lower or inp_type == "number":
+                        val = "1300000"
+                    else:
+                        val = self.personal.get("expected_salary", "13 LPA")
                 elif any(k in lbl_lower for k in ["notice", "joining"]):
-                    val = self.personal.get("notice_period", "10 days")
+                    if "in days" in lbl_lower or "days" in lbl_lower or inp_type == "number":
+                        val = "10"
+                    else:
+                        val = self.personal.get("notice_period", "10 days")
                 elif any(k in lbl_lower for k in ["experience", "years"]):
-                    val = str(self.personal.get("years_of_experience", "3.5"))
+                    if inp_type == "number":
+                        val = "3"
+                    else:
+                        val = str(self.personal.get("years_of_experience", "3.5"))
                 else:
                     # Generic screening question — ask QAEngine (defaults to Yes / positive answer)
                     val = self.qa.answer(label)
@@ -194,11 +236,24 @@ class UniversalFormFiller:
                 target = self.qa.answer(label)
                 matched = None
 
+                # Check for experience years/months
+                if any(k in lbl_lower for k in ["year", "experience"]) and "month" not in lbl_lower:
+                    for o in opt_clean:
+                        if o.startswith("3 ") or o == "3" or "3 year" in o.lower():
+                            matched = o
+                            break
+                elif "month" in lbl_lower:
+                    for o in opt_clean:
+                        if o.startswith("6 ") or o == "6" or "6 month" in o.lower():
+                            matched = o
+                            break
+
                 # 1. Match exact target
-                for o in opt_clean:
-                    if target.lower() in o.lower():
-                        matched = o
-                        break
+                if not matched:
+                    for o in opt_clean:
+                        if target.lower() in o.lower():
+                            matched = o
+                            break
 
                 # 2. If target is Yes, find option starting with Yes
                 if not matched and target.lower() == "yes":
@@ -275,6 +330,8 @@ class UniversalFormFiller:
             "button:has-text('Send application')",
             "button:has-text('Complete application')",
             "button:has-text('Apply now')",
+            "button:has-text('إرسال الطلب')",
+            "button:has-text('تقديم الطلب')",
             "input[type='submit'][value*='Submit']",
             "button[id*='submit']",
             "button[name*='submit']",
@@ -282,11 +339,19 @@ class UniversalFormFiller:
         for sel in submit_selectors:
             try:
                 btn = self.page.locator(sel).first
-                if await btn.count() and await btn.is_visible() and not await btn.is_disabled():
-                    logger.info(f"[FormFiller] Found final Submit button: {sel}. Clicking...")
-                    await btn.click()
-                    await asyncio.sleep(4)
-                    return True
+                if await btn.count() and await btn.is_visible():
+                    if await btn.is_disabled():
+                        logger.info(f"[FormFiller] Submit button {sel} is disabled. Scrolling and checking inputs...")
+                        await self.page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                        await asyncio.sleep(1)
+                        await self._fill_checkboxes()
+                        await self._fill_radios()
+
+                    if not await btn.is_disabled():
+                        logger.info(f"[FormFiller] Found final Submit button: {sel}. Clicking...")
+                        await btn.click()
+                        await asyncio.sleep(4)
+                        return True
             except Exception:
                 pass
         return False
@@ -303,6 +368,8 @@ class UniversalFormFiller:
             "button:has-text('Continue')",
             "button:has-text('Next')",
             "button:has-text('Review')",
+            "button:has-text('التالي')",
+            "button:has-text('مراجعة')",
             "button.artdeco-button--primary:has-text('Next')",
             "button[data-easy-apply-next-button]",
             "[data-testid='review-button']",
@@ -324,7 +391,7 @@ class UniversalFormFiller:
         """Checks if page shows confirmation message or URL."""
         try:
             curr_url = self.page.url.lower()
-            if any(k in curr_url for k in ["from=gnav-indapply-smartapply", "post-apply", "applied=true", "success", "confirmation", "thank-you"]):
+            if any(k in curr_url for k in ["post-apply", "postapply", "applied=true", "success", "confirmation", "thank-you"]):
                 return True
 
             content = (await self.page.content()).lower()
@@ -336,6 +403,12 @@ class UniversalFormFiller:
                 "application received",
                 "we have received your application",
                 "applied successfully",
+                "your application was sent",
+                "application was sent",
+                "تم إرسال طلبك",
+                "تم تقديم طلبك",
+                "تم إرسال الطلب",
+                "تم التقديم",
             ]
             return any(ind in content for ind in success_indicators)
         except Exception:

@@ -218,7 +218,7 @@ export const discoveryWorker = new Worker(
       });
     }
   },
-  { connection: redisConnection, concurrency: 3 }
+  { connection: redisConnection, concurrency: 1 }
 );
 
 // ── 2. Application Submission Worker ─────────────────────────────────
@@ -347,6 +347,9 @@ export const applicationWorker = new Worker(
           : `Application status for '${data.jobTitle}': ${finalStatus} (${result.error_reason || 'Requires manual action'})`,
       });
 
+      // Human cool-down delay between applications to protect against Cloudflare/Akamai rate limiting
+      await new Promise((resolve) => setTimeout(resolve, 15000));
+
     } catch (err: any) {
       console.error(`[Worker:Apply] Failed applying to ${data.jobTitle}:`, err.message);
       await applicationsService.updateApplicationStatus(appRecord.id, 'FAILED', {
@@ -360,5 +363,5 @@ export const applicationWorker = new Worker(
       });
     }
   },
-  { connection: redisConnection, concurrency: 2 }
+  { connection: redisConnection, concurrency: 1 }
 );
